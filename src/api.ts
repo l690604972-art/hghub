@@ -9,15 +9,17 @@ import type {
 export const APP_VERSION = __APP_VERSION__;
 
 const ua = navigator.userAgent;
-export const isAndroid = /Android/i.test(ua);
-export const isMacos = /Macintosh|Mac OS X/i.test(ua);
+export const isIos = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+export const isAndroid = /Android/i.test(ua) || isIos;
+export const isMacos = !isIos && /Macintosh|Mac OS X/i.test(ua);
 export const platform: "android" | "windows" | "macos" = isAndroid ? "android" : isMacos ? "macos" : "windows";
 
 /** 自定义协议地址随平台不同（见 tauri `register_asynchronous_uri_scheme_protocol` 文档）：
  *  Windows / Android → `http://<scheme>.localhost`
- *  macOS / iOS / Linux → `<scheme>://localhost`
- *  Rust 侧 `src-tauri/src/lib.rs` 里改写 m3u8 用的 scheme 必须与此一致。 */
-export const LOCAL = isMacos ? "hg://localhost" : "http://hg.localhost";
+ *  macOS / Linux → `<scheme>://localhost`
+ *  iOS → `http://127.0.0.1:19820`（iOS WKWebView 不支持 MSE，原生 AVPlayer 无法访问自定义 scheme，走本地环回 HTTP）
+ *  Rust 侧 `src-tauri/src/media.rs` 里改写 m3u8 用的 LOCAL_ORIGIN 必须与此一致。 */
+export const LOCAL = isIos ? "http://127.0.0.1:19820" : isMacos ? "hg://localhost" : "http://hg.localhost";
 
 /** src 是否已是本地协议地址（避免在详情页把代理地址再包一层） */
 export const isLocalMedia = (src: string) => src.startsWith(`${LOCAL}/`);

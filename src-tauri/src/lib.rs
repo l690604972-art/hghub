@@ -19,6 +19,7 @@ pub fn run() {
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }
+            tauri::async_runtime::spawn(media::serve_local_http());
             Ok(())
         })
         .register_asynchronous_uri_scheme_protocol("hg", |_app, request, responder| {

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api, APP_VERSION, hostOf, logLine, platform, type UpdateInfo } from "../api";
+import { api, APP_VERSION, hostOf, isIos, logLine, platform, type UpdateInfo } from "../api";
 import { useStore } from "../store";
 import { Modal, Toggle } from "../components/ui";
 import LinePicker from "../components/LinePicker";
@@ -139,7 +139,7 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
             </button>
           </Section>
 
-          <div className="text-center text-[10px] text-dim mt-5">HGhub {APP_VERSION} · {platform === "android" ? "Android" : platform === "macos" ? "macOS" : "Windows"} 客户端</div>
+          <div className="text-center text-[10px] text-dim mt-5">HGhub {APP_VERSION} · {isIos ? "iOS" : platform === "android" ? "Android" : platform === "macos" ? "macOS" : "Windows"} 客户端</div>
         </div>
       </div>
 

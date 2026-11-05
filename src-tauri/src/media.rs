@@ -16,12 +16,18 @@ use tauri::http::{Response, StatusCode};
 /// 本平台自定义协议的完整基址。
 ///
 /// Tauri 的自定义协议地址随平台不同：Windows / Android 是 `http://<scheme>.localhost`，
-/// macOS / iOS / Linux 是 `<scheme>://localhost`。m3u8 里的分片与 key 地址按它改写。
+/// macOS / Linux 是 `<scheme>://localhost`，iOS 走本地环回 `http://127.0.0.1:19820`
+/// （iOS 原生 AVPlayer 无法读取 WKURLSchemeHandler 自定义 scheme）。
 /// 前端 `src/api.ts` 的 `LOCAL` 必须与此一致，否则封面与视频全部加载失败。
+#[cfg(target_os = "ios")]
+pub const LOCAL_ORIGIN: &str = "http://127.0.0.1:19820";
 #[cfg(any(target_os = "windows", target_os = "android"))]
 pub const LOCAL_ORIGIN: &str = "http://hg.localhost";
-#[cfg(not(any(target_os = "windows", target_os = "android")))]
+#[cfg(not(any(target_os = "windows", target_os = "android", target_os = "ios")))]
 pub const LOCAL_ORIGIN: &str = "hg://localhost";
+
+pub const LOCAL_HTTP_ADDR: &str = "127.0.0.1:19820";
+pub const LOCAL_HTTP_ORIGIN: &str = "http://127.0.0.1:19820";
 
 const IMG_KEY: &[u8] = b"f5d965df75336270";
 const IMG_IV: &[u8] = b"97b60394abc2fbe1";
@@ -152,7 +158,8 @@ fn rewrite_uri_attr(line: &str, prefix: &str) -> String {
 
 /// 取 m3u8 并把 key / 分片地址改写到本地协议。
 pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, String> {
-    if let Some(hit) = PL_CACHE.lock().unwrap().get(url).cloned() {
+    let cache_key = format!("{prefix}|{url}");
+    if let Some(hit) = PL_CACHE.lock().unwrap().get(&cache_key).cloned() {
         return Ok(hit);
     }
     let (_, bytes) = fetch_bytes(url).await?;
@@ -181,7 +188,7 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
     }
 
     let arc = Arc::new(out);
-    cache_put(&PL_CACHE, url.to_string(), arc.clone(), PL_CACHE_MAX);
+    cache_put(&PL_CACHE, cache_key, arc.clone(), PL_CACHE_MAX);
     Ok(arc)
 }
 
@@ -259,6 +266,148 @@ pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> 
             Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
         },
         _ => respond(404, "text/plain", b"not found".to_vec(), "no-store"),
+    }
+}
+
+fn parse_byte_range(header: &str, total: usize) -> Option<(usize, usize)> {
+    if total == 0 {
+        return None;
+    }
+    let spec = header.trim().strip_prefix("bytes=")?;
+    let (start_s, end_s) = spec.split_once('-')?;
+    let start_s = start_s.trim();
+    let end_s = end_s.trim();
+    if start_s.is_empty() {
+        let suffix: usize = end_s.parse().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        let start = total.saturating_sub(suffix);
+        Some((start, total - 1))
+    } else {
+        let start: usize = start_s.parse().ok()?;
+        if start >= total {
+            return None;
+        }
+        let end = if end_s.is_empty() {
+            total - 1
+        } else {
+            end_s.parse::<usize>().ok()?.min(total - 1)
+        };
+        if start > end {
+            return None;
+        }
+        Some((start, end))
+    }
+}
+
+/// 本地 HTTP 环回代理（127.0.0.1:19820），供 iOS WKWebView 原生 `<video>` (AVPlayer)
+/// 读取 m3u8 / key / ts / mp4 与解密封面，支持 HEAD 与 Range 分片请求。
+pub async fn serve_local_http() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = match tokio::net::TcpListener::bind(LOCAL_HTTP_ADDR).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[media] bind {LOCAL_HTTP_ADDR} failed: {e}");
+            return;
+        }
+    };
+    loop {
+        let (mut stream, _) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(_) => continue,
+        };
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 8192];
+            let mut filled = 0usize;
+            while filled < buf.len() {
+                match stream.read(&mut buf[filled..]).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        filled += n;
+                        if buf[..filled].windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
+            if filled == 0 {
+                return;
+            }
+            let req_str = String::from_utf8_lossy(&buf[..filled]);
+            let mut lines = req_str.lines();
+            let req_line = lines.next().unwrap_or("");
+            let mut parts = req_line.split_whitespace();
+            let method = parts.next().unwrap_or("GET");
+            let raw_target = parts.next().unwrap_or("/");
+
+            if method.eq_ignore_ascii_case("OPTIONS") {
+                let hdr = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, HEAD, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(hdr.as_bytes()).await;
+                return;
+            }
+
+            let range_hdr = lines.find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                if k.trim().eq_ignore_ascii_case("range") {
+                    Some(v.trim().to_string())
+                } else {
+                    None
+                }
+            });
+
+            let (path, query) = raw_target.split_once('?').unwrap_or((raw_target, ""));
+            let resp = handle(path, query, LOCAL_HTTP_ORIGIN).await;
+            let status = resp.status().as_u16();
+            let ctype = resp
+                .headers()
+                .get("Content-Type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let cache = resp
+                .headers()
+                .get("Cache-Control")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("no-store")
+                .to_string();
+            let body = resp.into_body();
+            let is_head = method.eq_ignore_ascii_case("HEAD");
+
+            if status == 200 {
+                if let Some(ref rh) = range_hdr {
+                    if let Some((start, end)) = parse_byte_range(rh, body.len()) {
+                        let slice = &body[start..=end];
+                        let hdr = format!(
+                            "HTTP/1.1 206 Partial Content\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: {cache}\r\nConnection: close\r\n\r\n",
+                            slice.len(),
+                            body.len()
+                        );
+                        let _ = stream.write_all(hdr.as_bytes()).await;
+                        if !is_head {
+                            let _ = stream.write_all(slice).await;
+                        }
+                        return;
+                    }
+                }
+            }
+
+            let reason = match status {
+                200 => "OK",
+                400 => "Bad Request",
+                404 => "Not Found",
+                _ => "Bad Gateway",
+            };
+            let hdr = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: {cache}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(hdr.as_bytes()).await;
+            if !is_head {
+                let _ = stream.write_all(&body).await;
+            }
+        });
     }
 }
 

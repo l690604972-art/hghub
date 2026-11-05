@@ -22,12 +22,16 @@ const dest = join(root, "src-tauri", "gen", "android", "app", "src", "main", "re
 
 if (!existsSync(src)) {
   console.log(`[icons] 跳过：缺少 ${src}`);
-  process.exit(0);
-}
-if (!existsSync(dest)) {
+} else if (!existsSync(dest)) {
   console.log("[icons] 跳过：gen/android 还没生成（先跑 tauri android init）");
-  process.exit(0);
+} else {
+  cpSync(src, dest, { recursive: true, force: true });
+  console.log(`[icons] 安卓图标已同步 → ${dest}`);
 }
 
-cpSync(src, dest, { recursive: true, force: true });
-console.log(`[icons] 安卓图标已同步 → ${dest}`);
+const iosSrc = join(root, "src-tauri", "icons", "ios");
+const iosDest = join(root, "src-tauri", "gen", "apple", "Assets.xcassets", "AppIcon.appiconset");
+if (existsSync(iosSrc) && existsSync(iosDest)) {
+  cpSync(iosSrc, iosDest, { recursive: true, force: true });
+  console.log(`[icons] iOS 图标已同步 → ${iosDest}`);
+}

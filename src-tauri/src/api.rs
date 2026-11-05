@@ -186,7 +186,7 @@ fn open_external(url: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_os = "ios"))))]
 fn open_external(url: &str) -> Result<(), String> {
     std::process::Command::new("xdg-open")
         .arg(url)
@@ -195,7 +195,7 @@ fn open_external(url: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 fn open_external(_url: &str) -> Result<(), String> {
     Err("移动端请手动在浏览器打开".to_string())
 }
