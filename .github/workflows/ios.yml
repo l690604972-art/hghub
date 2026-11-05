@@ -16,7 +16,7 @@ env:
 jobs:
   ios:
     name: iOS (unsigned IPA)
-    runs-on: macos-15
+    runs-on: macos-14
     permissions:
       contents: write
     steps:
@@ -88,6 +88,7 @@ jobs:
             const fs = require("fs");
             const p = "src-tauri/gen/apple/project.yml";
             let yml = fs.readFileSync(p, "utf8");
+            yml = yml.replace("options:\n", "options:\n  xcodeVersion: \"15.0\"\n");
             yml = yml.replace(/^\s*-\s*path:\s*huangguo-client_iOS\s*\n/m, "");
             yml = yml.replace(/script:\s*[^\n]+xcode-script[^\n]*/g, "script: echo \"Rust staticlib already built\"");
             fs.writeFileSync(p, yml);
