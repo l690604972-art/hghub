@@ -106,7 +106,6 @@ jobs:
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -configuration Release \
-            -arch arm64 \
             -derivedDataPath src-tauri/gen/apple/build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -136,8 +135,7 @@ jobs:
           APP_BUNDLE=$(find Payload -maxdepth 1 -name "*.app" -type d | head -n 1)
           if [ -f "$APP_BUNDLE/Info.plist" ]; then
             /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$APP_BUNDLE/Info.plist" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$APP_BUNDLE/Info.plist"
-            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$APP_BUNDLE/Info.plist" || true
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$APP_BUNDLE/Info.plist" || true
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$APP_BUNDLE/Info.plist" || true
           fi

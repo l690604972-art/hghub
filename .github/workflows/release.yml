@@ -249,7 +249,6 @@ jobs:
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -configuration Release \
-            -arch arm64 \
             -derivedDataPath src-tauri/gen/apple/build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
