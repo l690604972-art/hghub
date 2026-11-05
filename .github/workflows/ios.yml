@@ -63,7 +63,7 @@ jobs:
 
       - name: 编译 Rust iOS 静态库 (aarch64-apple-ios)
         run: |
-          cargo build --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --release
+          cargo build --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --release --features tauri/custom-protocol
           ls -lh src-tauri/target/aarch64-apple-ios/release/*.a
 
       - name: 初始化 Tauri iOS 工程并打包 IPA
@@ -76,23 +76,22 @@ jobs:
           pnpm tauri ios init --ci
           node scripts/sync-android-icons.mjs
 
-          echo "=== 2. Original project.yml ==="
-          cat src-tauri/gen/apple/project.yml
-
-          mkdir -p src-tauri/gen/apple/Externals/arm64/Release src-tauri/gen/apple/Externals/arm64/release
+          mkdir -p src-tauri/gen/apple/Externals/arm64/Release src-tauri/gen/apple/Externals/arm64/release src-tauri/gen/apple/Externals/arm64/debug
           cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
              src-tauri/gen/apple/Externals/arm64/Release/libapp.a
           cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
              src-tauri/gen/apple/Externals/arm64/release/libapp.a
+          cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
+             src-tauri/gen/apple/Externals/arm64/debug/libapp.a
 
           node -e '
             const fs = require("fs");
             const p = "src-tauri/gen/apple/project.yml";
             let yml = fs.readFileSync(p, "utf8");
+            yml = yml.replace(/^\s*-\s*path:\s*huangguo-client_iOS\s*\n/m, "");
             yml = yml.replace(/script:\s*[^\n]+xcode-script[^\n]*/g, "script: echo \"Rust staticlib already built\"");
-            yml = yml.replace(/^\s*entitlements:[\s\S]*?(?=^\s*[a-zA-Z_]+:|\Z)/gm, "");
             fs.writeFileSync(p, yml);
-            console.log("=== 3. Patched project.yml ===");
+            console.log("=== Patched project.yml ===");
             console.log(yml);
           '
           (cd src-tauri/gen/apple && xcodegen generate)
@@ -105,16 +104,15 @@ jobs:
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$PLIST"
           done
 
-          echo "=== 4. Running xcodebuild ==="
+          echo "=== Running xcodebuild ==="
           XCODEPROJ=$(find src-tauri/gen/apple -maxdepth 2 -name "*.xcodeproj" | head -n 1)
-          xcodebuild -project "$XCODEPROJ" -list
           SCHEME=$(xcodebuild -project "$XCODEPROJ" -list | awk '/Schemes:/{f=1;next} f && NF{print $1; exit}')
           echo "Using Project=$XCODEPROJ Scheme=$SCHEME"
 
           xcodebuild -project "$XCODEPROJ" \
             -scheme "$SCHEME" \
             -sdk iphoneos \
-            -configuration Release \
+            -configuration release \
             -derivedDataPath src-tauri/gen/apple/build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -129,7 +127,7 @@ jobs:
           V="${{ steps.ver.outputs.version }}"
           APP_PATH=$(find src-tauri/gen/apple/build -name "*.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
-            echo "=== 5. Packaging $APP_PATH ==="
+            echo "=== Packaging $APP_PATH ==="
             rm -rf Payload
             mkdir -p Payload
             cp -R "$APP_PATH" Payload/
@@ -147,7 +145,7 @@ jobs:
             exit 0
           else
             echo "::error::未找到 .app，详见 Release 中的 build-debug.log"
-            exit 0
+            exit 1
           fi
 
       - uses: actions/upload-artifact@v4
@@ -157,6 +155,7 @@ jobs:
           if-no-files-found: error
 
       - name: 发布到 GitHub Releases (ios-latest)
+        if: always()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ios-latest

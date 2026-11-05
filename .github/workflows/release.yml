@@ -214,20 +214,23 @@ jobs:
 
       - name: 编译 Rust iOS 静态库 (aarch64-apple-ios)
         run: |
-          cargo build --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --release
+          cargo build --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --release --features tauri/custom-protocol
 
       - name: 生成 iOS 工程并注入静态库与图标
         run: |
           set -euo pipefail
           pnpm tauri ios init --ci
           node scripts/sync-android-icons.mjs
-          mkdir -p src-tauri/gen/apple/Externals/arm64/Release
+          mkdir -p src-tauri/gen/apple/Externals/arm64/Release src-tauri/gen/apple/Externals/arm64/release
           cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
              src-tauri/gen/apple/Externals/arm64/Release/libapp.a
+          cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
+             src-tauri/gen/apple/Externals/arm64/release/libapp.a
           node -e '
             const fs = require("fs");
             const p = "src-tauri/gen/apple/project.yml";
             let yml = fs.readFileSync(p, "utf8");
+            yml = yml.replace(/^\s*-\s*path:\s*huangguo-client_iOS\s*\n/m, "");
             yml = yml.replace(/script:\s*[^\n]+xcode-script[^\n]*/g, "script: echo \"Rust staticlib already built\"");
             fs.writeFileSync(p, yml);
           '
@@ -243,12 +246,11 @@ jobs:
         run: |
           set -euo pipefail
           XCODEPROJ=$(find src-tauri/gen/apple -maxdepth 2 -name "*.xcodeproj" | head -n 1)
-          SCHEME=$(xcodebuild -project "$XCODEPROJ" -list -json | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf8'));const s=d.project.schemes;console.log(s.find(x=>x.endsWith('_iOS'))||s[0]);")
+          SCHEME=$(xcodebuild -project "$XCODEPROJ" -list | awk '/Schemes:/{f=1;next} f && NF{print $1; exit}')
           xcodebuild -project "$XCODEPROJ" \
             -scheme "$SCHEME" \
             -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -configuration Release \
+            -configuration release \
             -derivedDataPath src-tauri/gen/apple/build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
