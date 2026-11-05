@@ -236,6 +236,10 @@ jobs:
             fs.writeFileSync(p, yml);
           '
           (cd src-tauri/gen/apple && xcodegen generate)
+          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/g' src-tauri/gen/apple/huangguo-client.xcodeproj/project.pbxproj
+          if ls -d /Applications/Xcode_16*.app >/dev/null 2>&1; then
+            sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -n 1)"
+          fi
           for PLIST in $(find src-tauri/gen/apple -name "Info.plist"); do
             /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST"
@@ -246,8 +250,8 @@ jobs:
       - name: 编译 iOS .app
         run: |
           set -euo pipefail
-          XCODEPROJ=$(find src-tauri/gen/apple -maxdepth 2 -name "*.xcodeproj" | head -n 1)
-          SCHEME=$(xcodebuild -project "$XCODEPROJ" -list | awk '/Schemes:/{f=1;next} f && NF{print $1; exit}')
+          XCODEPROJ="src-tauri/gen/apple/huangguo-client.xcodeproj"
+          SCHEME="huangguo-client_iOS"
           xcodebuild -project "$XCODEPROJ" \
             -scheme "$SCHEME" \
             -sdk iphoneos \
