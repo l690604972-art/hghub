@@ -53,19 +53,40 @@ jobs:
           key: ios
 
       - name: 安装 XcodeGen（如缺失）
-        run: |
-          which xcodegen || brew install xcodegen
+        run: which xcodegen || brew install xcodegen
 
-      - name: 安装前端依赖
-        run: pnpm install --frozen-lockfile
-
-      - name: 初始化 Tauri iOS 工程并同步图标
+      - name: 安装前端依赖与构建前端产物
         run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: 编译 Rust iOS 静态库 (aarch64-apple-ios)
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --release
+          ls -lh src-tauri/target/aarch64-apple-ios/release/*.a
+
+      - name: 初始化 Tauri iOS 工程并注入静态库与图标
+        run: |
+          set -euo pipefail
           pnpm tauri ios init --ci
           node scripts/sync-android-icons.mjs
 
-      - name: 配置 Info.plist 允许本地环回与 HTTP 请求
-        run: |
+          mkdir -p src-tauri/gen/apple/Externals/arm64/Release
+          cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
+             src-tauri/gen/apple/Externals/arm64/Release/libapp.a
+
+          # 将 project.yml 中的 Build Rust Code 脚本替换为跳过（静态库已由上一步编译并就位）
+          node -e '
+            const fs = require("fs");
+            const p = "src-tauri/gen/apple/project.yml";
+            let yml = fs.readFileSync(p, "utf8");
+            yml = yml.replace(/script:\s*[^\n]+xcode-script[^\n]*/g, "script: echo \"Rust staticlib already built\"");
+            fs.writeFileSync(p, yml);
+            console.log("Updated project.yml:");
+            console.log(yml);
+          '
+          (cd src-tauri/gen/apple && xcodegen generate)
+
           for PLIST in $(find src-tauri/gen/apple -name "Info.plist"); do
             echo "Patching $PLIST"
             /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
@@ -74,27 +95,30 @@ jobs:
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$PLIST"
           done
 
-      - name: 构建前端产物
-        run: pnpm build
-
       - name: 编译 iOS Release .app（免证书无签名）
         run: |
-          set -euo pipefail
+          set -o pipefail
           XCODEPROJ=$(find src-tauri/gen/apple -maxdepth 2 -name "*.xcodeproj" | head -n 1)
-          echo "Found project: $XCODEPROJ"
           SCHEME=$(xcodebuild -project "$XCODEPROJ" -list -json | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf8'));const s=d.project.schemes;console.log(s.find(x=>x.endsWith('_iOS'))||s[0]);")
-          echo "Using scheme: $SCHEME"
-          xcodebuild -project "$XCODEPROJ" \
+          echo "Project=$XCODEPROJ Scheme=$SCHEME"
+          if ! xcodebuild -project "$XCODEPROJ" \
             -scheme "$SCHEME" \
             -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             -configuration Release \
             -arch arm64 \
             -derivedDataPath src-tauri/gen/apple/build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
             DEVELOPMENT_TEAM="" \
-            build
+            build > xcodebuild.log 2>&1; then
+            ERR_SUMMARY=$(grep -E "error:|fatal|ld:|archive|Library not found|Undefined" xcodebuild.log | tail -n 25 | tr '\n' ' ')
+            tail -n 80 xcodebuild.log
+            echo "::error title=xcodebuild failed::${ERR_SUMMARY:-$(tail -n 15 xcodebuild.log | tr '\n' ' ')}"
+            exit 1
+          fi
 
       - name: 打包 IPA（含 Ad-hoc 签名，兼容自签工具与 TrollStore）
         run: |
@@ -113,8 +137,9 @@ jobs:
           if [ -f "$APP_BUNDLE/Info.plist" ]; then
             /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$APP_BUNDLE/Info.plist" 2>/dev/null || true
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$APP_BUNDLE/Info.plist"
-            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$APP_BUNDLE/Info.plist"
-            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$APP_BUNDLE/Info.plist"
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$APP_BUNDLE/Info.plist" || true
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$APP_BUNDLE/Info.plist" || true
           fi
           codesign --force --deep --sign - "$APP_BUNDLE"
           zip -r9 "artifacts/HGhub_${V}_ios_unsigned.ipa" Payload

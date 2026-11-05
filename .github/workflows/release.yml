@@ -173,7 +173,7 @@ jobs:
   # ================= iOS：免签 IPA =================
   ios:
     name: iOS (unsigned IPA)
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -207,15 +207,31 @@ jobs:
       - name: 安装 XcodeGen（如缺失）
         run: which xcodegen || brew install xcodegen
 
-      - run: pnpm install --frozen-lockfile
-
-      - name: 生成 iOS 工程并同步图标
+      - name: 安装前端依赖与构建前端产物
         run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: 编译 Rust iOS 静态库 (aarch64-apple-ios)
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --release
+
+      - name: 生成 iOS 工程并注入静态库与图标
+        run: |
+          set -euo pipefail
           pnpm tauri ios init --ci
           node scripts/sync-android-icons.mjs
-
-      - name: 配置 Info.plist 允许本地环回与 HTTP 请求
-        run: |
+          mkdir -p src-tauri/gen/apple/Externals/arm64/Release
+          cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
+             src-tauri/gen/apple/Externals/arm64/Release/libapp.a
+          node -e '
+            const fs = require("fs");
+            const p = "src-tauri/gen/apple/project.yml";
+            let yml = fs.readFileSync(p, "utf8");
+            yml = yml.replace(/script:\s*[^\n]+xcode-script[^\n]*/g, "script: echo \"Rust staticlib already built\"");
+            fs.writeFileSync(p, yml);
+          '
+          (cd src-tauri/gen/apple && xcodegen generate)
           for PLIST in $(find src-tauri/gen/apple -name "Info.plist"); do
             /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST"
@@ -223,21 +239,22 @@ jobs:
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$PLIST"
           done
 
-      - name: 构建前端与 iOS .app
+      - name: 编译 iOS .app
         run: |
           set -euo pipefail
-          pnpm build
           XCODEPROJ=$(find src-tauri/gen/apple -maxdepth 2 -name "*.xcodeproj" | head -n 1)
           SCHEME=$(xcodebuild -project "$XCODEPROJ" -list -json | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf8'));const s=d.project.schemes;console.log(s.find(x=>x.endsWith('_iOS'))||s[0]);")
           xcodebuild -project "$XCODEPROJ" \
             -scheme "$SCHEME" \
             -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             -configuration Release \
             -arch arm64 \
             -derivedDataPath src-tauri/gen/apple/build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
             DEVELOPMENT_TEAM="" \
             build
 
