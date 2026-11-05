@@ -16,7 +16,9 @@ env:
 jobs:
   ios:
     name: iOS (unsigned IPA)
-    runs-on: macos-latest
+    runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -123,3 +125,14 @@ jobs:
           name: HGhub-iOS-IPA
           path: artifacts/*.ipa
           if-no-files-found: error
+
+      - name: 发布到 GitHub Releases (ios-latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-latest
+          name: "HGhub v${{ steps.ver.outputs.version }} (iOS Unsigned IPA)"
+          body: |
+            自动构建的 iOS 免证书未签名 IPA（已做 Ad-hoc 签名，兼容 Sideloadly / AltStore / 爱思助手 / TrollStore）。
+          files: artifacts/*.ipa
+          prerelease: false
+          make_latest: true
