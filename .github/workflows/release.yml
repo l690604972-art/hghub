@@ -221,22 +221,21 @@ jobs:
           set -euo pipefail
           pnpm tauri ios init --ci
           node scripts/sync-android-icons.mjs
-          mkdir -p src-tauri/gen/apple/Externals/arm64/Release src-tauri/gen/apple/Externals/arm64/release
-          cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
-             src-tauri/gen/apple/Externals/arm64/Release/libapp.a
-          cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
-             src-tauri/gen/apple/Externals/arm64/release/libapp.a
           node -e '
             const fs = require("fs");
             const p = "src-tauri/gen/apple/project.yml";
             let yml = fs.readFileSync(p, "utf8");
             yml = yml.replace("options:\n", "options:\n  xcodeVersion: \"15.0\"\n");
             yml = yml.replace(/^\s*-\s*path:\s*huangguo-client_iOS\s*\n/m, "");
+            yml = yml.replace(/^\s*-\s*path:\s*Externals\s*\n/m, "");
             yml = yml.replace(/script:\s*[^\n]+xcode-script[^\n]*/g, "script: echo \"Rust staticlib already built\"");
             fs.writeFileSync(p, yml);
           '
           (cd src-tauri/gen/apple && xcodegen generate)
           sed -i '' 's/objectVersion = 77;/objectVersion = 56;/g' src-tauri/gen/apple/huangguo-client.xcodeproj/project.pbxproj
+          mkdir -p src-tauri/gen/apple/Externals/arm64/release
+          cp src-tauri/target/aarch64-apple-ios/release/libhuangguo_client_lib.a \
+             src-tauri/gen/apple/Externals/arm64/release/libapp.a
           if ls -d /Applications/Xcode_16*.app >/dev/null 2>&1; then
             sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -n 1)"
           fi
